@@ -1,4 +1,4 @@
-import React, { useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { createRoot } from 'react-dom/client';
 import {
   Activity,
@@ -17,6 +17,7 @@ import {
   Code2,
   Copy,
   Database,
+  Download,
   ExternalLink,
   FileCheck2,
   Filter,
@@ -37,6 +38,7 @@ import {
   TimerReset,
   TrendingDown,
   TrendingUp,
+  Upload,
   X,
   Zap
 } from 'lucide-react';
@@ -64,7 +66,17 @@ const trendData = [
   { time: '17:00', runs: 64, score: 94, latency: 2.1 }
 ];
 
-const traces = [
+const trendData7d = [
+  { time: '周一', runs: 248, score: 88, latency: 2.7 },
+  { time: '周二', runs: 274, score: 89, latency: 2.6 },
+  { time: '周三', runs: 312, score: 90, latency: 2.5 },
+  { time: '周四', runs: 298, score: 91, latency: 2.4 },
+  { time: '周五', runs: 334, score: 92, latency: 2.2 },
+  { time: '周六', runs: 286, score: 90, latency: 2.3 },
+  { time: '周日', runs: 320, score: 93, latency: 2.1 }
+];
+
+const seedTraces = [
   {
     id: 'tr_01HZXK8N4K',
     name: '合同审阅助手',
@@ -182,6 +194,101 @@ const traces = [
   }
 ];
 
+const storageKey = 'agent-observatory.traces.v1';
+const periodOptions = ['最近 24 小时', '最近 7 天'];
+const filterOptions = ['全部', 'passed', 'warning', 'failed'];
+
+function cloneTrace(trace) {
+  return {
+    ...trace,
+    checks: trace.checks.map((item) => ({ ...item })),
+    events: trace.events.map((item) => ({ ...item })),
+    sources: trace.sources.map((item) => ({ ...item }))
+  };
+}
+
+function loadPersistedTraces() {
+  if (typeof window === 'undefined') return seedTraces.map(cloneTrace);
+
+  try {
+    const raw = window.localStorage.getItem(storageKey);
+    if (!raw) return seedTraces.map(cloneTrace);
+    const parsed = JSON.parse(raw);
+    const items = extractTraceArray(parsed);
+    if (!items.length) return seedTraces.map(cloneTrace);
+    return items.map((trace, index) => normalizeTrace(trace, index));
+  } catch {
+    return seedTraces.map(cloneTrace);
+  }
+}
+
+function formatTraceId() {
+  const tail = Math.random().toString(36).slice(2, 9).toUpperCase();
+  return `tr_${Date.now().toString(36).toUpperCase()}${tail}`;
+}
+
+function createDemoTrace(index) {
+  const statusPool = ['passed', 'warning', 'failed'];
+  const templates = [
+    {
+      name: '合同审阅助手',
+      model: 'Qwen3-32B',
+      environment: 'production',
+      query: '请总结这份合同中关于付款和违约的关键条款。',
+      answer: '系统自动检索合同付款与违约条款，生成了带引用的摘要。'
+    },
+    {
+      name: '客服知识助手',
+      model: 'DeepSeek-V3',
+      environment: 'staging',
+      query: '用户反馈订单状态一直没有变化，应该怎么回复？',
+      answer: '系统建议先核对订单编号、支付渠道和到账时延，再引导用户等待或转人工。'
+    },
+    {
+      name: '研究资料问答',
+      model: 'GPT-4.1-mini',
+      environment: 'production',
+      query: '总结最近三篇 RAG 评测论文的共同结论。',
+      answer: '系统汇总了检索质量、引用可验证性和事实一致性三项核心结论。'
+    }
+  ];
+  const template = templates[index % templates.length];
+  const status = statusPool[index % statusPool.length];
+  const scoreByStatus = { passed: 93, warning: 76, failed: 61 };
+  const now = new Date();
+  const timeLabel = `${now.getHours().toString().padStart(2, '0')}:${now.getMinutes().toString().padStart(2, '0')}:${now.getSeconds().toString().padStart(2, '0')}`;
+
+  return {
+    id: formatTraceId(),
+    name: template.name,
+    environment: template.environment,
+    model: template.model,
+    status,
+    score: scoreByStatus[status],
+    latency: `${(1.4 + Math.random() * 4.6).toFixed(1)}s`,
+    cost: `$${(0.004 + Math.random() * 0.017).toFixed(3)}`,
+    time: '刚刚',
+    query: template.query,
+    answer: template.answer,
+    checks: [
+      { label: '引用完整性', value: status === 'failed' ? '失败' : status === 'warning' ? '警告' : '通过', score: status === 'failed' ? '0.43' : status === 'warning' ? '0.76' : '0.97', tone: status === 'failed' ? 'bad' : status === 'warning' ? 'warning' : 'good' },
+      { label: '答案相关性', value: status === 'failed' ? '警告' : '通过', score: status === 'failed' ? '0.63' : '0.91', tone: status === 'failed' ? 'warning' : 'good' },
+      { label: '事实一致性', value: status === 'failed' ? '失败' : '通过', score: status === 'failed' ? '0.58' : '0.89', tone: status === 'failed' ? 'bad' : 'good' },
+      { label: '敏感信息', value: '安全', score: '1.00', tone: 'good' }
+    ],
+    events: [
+      { type: 'input', label: '用户问题', meta: timeLabel, detail: `已接收 ${18 + index} tokens 的中文查询` },
+      { type: 'retrieve', label: '检索知识库', meta: timeLabel, detail: `召回 ${3 + (index % 5)} 个片段，最高相似度 ${(0.76 + Math.random() * 0.17).toFixed(2)}` },
+      { type: 'tool', label: '引用定位器', meta: timeLabel, detail: `已记录 ${2 + (index % 3)} 个来源定位` },
+      { type: 'model', label: '模型生成', meta: timeLabel, detail: `${template.model} · ${480 + index * 7} output tokens` },
+      { type: 'check', label: '质量门禁', meta: timeLabel, detail: status === 'failed' ? '事实一致性失败，自动阻断发布' : '4/4 检查通过，trace 已归档' }
+    ],
+    sources: [
+      { title: '导入的评测集.json', page: 'trace sample', quote: '这是一条由本地生成器创建的演示 trace，可替换为真实上报数据。' }
+    ]
+  };
+}
+
 const navItems = [
   { label: '总览', icon: BarChart3 },
   { label: 'Trace Explorer', icon: Activity },
@@ -190,20 +297,215 @@ const navItems = [
   { label: '安全策略', icon: ShieldCheck }
 ];
 
+function parseMetricNumber(value) {
+  const parsed = Number.parseFloat(String(value).replace(/[^0-9.-]/g, ''));
+  return Number.isFinite(parsed) ? parsed : 0;
+}
+
+function formatSignedPercent(value, digits = 1) {
+  return `${value >= 0 ? '+' : ''}${value.toFixed(digits)}%`;
+}
+
+function relativePercentChange(current, baseline, digits = 1) {
+  if (!baseline) return '0.0%';
+  return formatSignedPercent(((current - baseline) / baseline) * 100, digits);
+}
+
+function pointDelta(current, baseline, digits = 1) {
+  const delta = current - baseline;
+  return `${delta >= 0 ? '+' : ''}${delta.toFixed(digits)} pp`;
+}
+
+function formatCurrency(value, digits = 2) {
+  return `$${value.toFixed(digits)}`;
+}
+
+function formatInteger(value) {
+  return new Intl.NumberFormat('zh-CN').format(Math.round(value));
+}
+
+function summarizeTraces(items) {
+  const safeItems = Array.isArray(items) ? items : [];
+  const totalRuns = safeItems.length;
+
+  if (!totalRuns) {
+    return {
+      totalRuns: 0,
+      averageScore: 0,
+      averageLatency: 0,
+      totalCost: 0,
+      passRate: 0
+    };
+  }
+
+  const aggregate = safeItems.reduce(
+    (acc, trace) => {
+      acc.score += Number(trace.score) || 0;
+      acc.latency += parseMetricNumber(trace.latency);
+      acc.cost += parseMetricNumber(trace.cost);
+      acc.passed += trace.status === 'passed' ? 1 : 0;
+      return acc;
+    },
+    { score: 0, latency: 0, cost: 0, passed: 0 }
+  );
+
+  return {
+    totalRuns,
+    averageScore: aggregate.score / totalRuns,
+    averageLatency: aggregate.latency / totalRuns,
+    totalCost: aggregate.cost,
+    passRate: (aggregate.passed / totalRuns) * 100
+  };
+}
+
+function summarizeGateRows(items) {
+  const safeItems = Array.isArray(items) ? items : [];
+  const defs = [
+    { label: '引用完整性', index: 0, tone: 'mint' },
+    { label: '答案相关性', index: 1, tone: 'blue' },
+    { label: '事实一致性', index: 2, tone: 'violet' },
+    { label: '敏感信息拦截', index: 3, tone: 'coral' }
+  ];
+
+  return defs.map(({ label, index, tone }) => {
+    const passed = safeItems.reduce((count, trace) => {
+      const check = trace.checks?.[index];
+      if (!check) return count;
+      if (index === 3) {
+        return count + (check.value === '安全' ? 1 : 0);
+      }
+      return count + (check.tone !== 'bad' && check.value !== '失败' ? 1 : 0);
+    }, 0);
+
+    const rate = safeItems.length ? (passed / safeItems.length) * 100 : 0;
+    return { label, tone, rate };
+  });
+}
+
+function normalizeCheck(check, fallback) {
+  const source = check && typeof check === 'object' ? check : {};
+  const statusTone = ['good', 'warning', 'bad'].includes(source.tone) ? source.tone : fallback.tone;
+
+  return {
+    label: typeof source.label === 'string' && source.label.trim() ? source.label : fallback.label,
+    value: typeof source.value === 'string' && source.value.trim() ? source.value : fallback.value,
+    score: typeof source.score === 'string' && source.score.trim() ? source.score : fallback.score,
+    tone: statusTone
+  };
+}
+
+function normalizeEvent(event, fallback) {
+  const source = event && typeof event === 'object' ? event : {};
+  return {
+    type: typeof source.type === 'string' && source.type.trim() ? source.type : fallback.type,
+    label: typeof source.label === 'string' && source.label.trim() ? source.label : fallback.label,
+    meta: typeof source.meta === 'string' && source.meta.trim() ? source.meta : fallback.meta,
+    detail: typeof source.detail === 'string' && source.detail.trim() ? source.detail : fallback.detail
+  };
+}
+
+function normalizeSource(source, fallback) {
+  const value = source && typeof source === 'object' ? source : {};
+  return {
+    title: typeof value.title === 'string' && value.title.trim() ? value.title : fallback.title,
+    page: typeof value.page === 'string' && value.page.trim() ? value.page : fallback.page,
+    quote: typeof value.quote === 'string' && value.quote.trim() ? value.quote : fallback.quote
+  };
+}
+
+function normalizeTrace(raw, index = 0) {
+  const fallback = createDemoTrace(index);
+  const source = raw && typeof raw === 'object' ? raw : {};
+  const validStatus = ['passed', 'warning', 'failed'];
+  const status = validStatus.includes(source.status) ? source.status : fallback.status;
+  const environment = source.environment === 'staging' ? 'staging' : 'production';
+  const id = typeof source.id === 'string' && source.id.trim() ? source.id : formatTraceId();
+  const score = Number.isFinite(Number(source.score)) ? Number(source.score) : fallback.score;
+  const latency = typeof source.latency === 'string' && source.latency.trim() ? source.latency : fallback.latency;
+  const cost = typeof source.cost === 'string' && source.cost.trim() ? source.cost : fallback.cost;
+  const time = typeof source.time === 'string' && source.time.trim() ? source.time : fallback.time;
+  const query = typeof source.query === 'string' && source.query.trim() ? source.query : fallback.query;
+  const answer = typeof source.answer === 'string' && source.answer.trim() ? source.answer : fallback.answer;
+  const checks = Array.isArray(source.checks) && source.checks.length
+    ? source.checks.map((check, checkIndex) => normalizeCheck(check, fallback.checks[checkIndex] ?? fallback.checks[0]))
+    : fallback.checks.map((item) => ({ ...item }));
+  const events = Array.isArray(source.events) && source.events.length
+    ? source.events.map((event, eventIndex) => normalizeEvent(event, fallback.events[eventIndex] ?? fallback.events[0]))
+    : fallback.events.map((item) => ({ ...item }));
+  const sources = Array.isArray(source.sources) && source.sources.length
+    ? source.sources.map((item, sourceIndex) => normalizeSource(item, fallback.sources[sourceIndex] ?? fallback.sources[0]))
+    : fallback.sources.map((item) => ({ ...item }));
+
+  return {
+    id,
+    name: typeof source.name === 'string' && source.name.trim() ? source.name : fallback.name,
+    environment,
+    model: typeof source.model === 'string' && source.model.trim() ? source.model : fallback.model,
+    status,
+    score,
+    latency,
+    cost,
+    time,
+    query,
+    answer,
+    checks,
+    events,
+    sources
+  };
+}
+
+function extractTraceArray(payload) {
+  if (Array.isArray(payload)) return payload;
+  if (!payload || typeof payload !== 'object') return [];
+  if (Array.isArray(payload.traces)) return payload.traces;
+  if (Array.isArray(payload.items)) return payload.items;
+  if (Array.isArray(payload.data)) return payload.data;
+  return [];
+}
+
+function downloadJson(filename, payload) {
+  const blob = new Blob([JSON.stringify(payload, null, 2)], { type: 'application/json;charset=utf-8' });
+  const url = URL.createObjectURL(blob);
+  const anchor = document.createElement('a');
+  anchor.href = url;
+  anchor.download = filename;
+  anchor.click();
+  URL.revokeObjectURL(url);
+}
+
 function App() {
   const [activeNav, setActiveNav] = useState('总览');
   const [period, setPeriod] = useState('最近 24 小时');
-  const [selectedTraceId, setSelectedTraceId] = useState(traces[0].id);
+  const initialTraces = useMemo(() => loadPersistedTraces(), []);
+  const [traces, setTraces] = useState(initialTraces);
+  const [selectedTraceId, setSelectedTraceId] = useState(() => initialTraces[0]?.id ?? seedTraces[0].id);
   const [filter, setFilter] = useState('全部');
   const [mobileNavOpen, setMobileNavOpen] = useState(false);
   const [isRunning, setIsRunning] = useState(false);
   const [toast, setToast] = useState('');
+  const fileInputRef = useRef(null);
 
-  const selectedTrace = traces.find((trace) => trace.id === selectedTraceId) ?? traces[0];
+  useEffect(() => {
+    window.localStorage.setItem(storageKey, JSON.stringify(traces));
+  }, [traces]);
+
+  useEffect(() => {
+    if (!traces.some((trace) => trace.id === selectedTraceId) && traces[0]) {
+      setSelectedTraceId(traces[0].id);
+    }
+  }, [selectedTraceId, traces]);
+
+  const currentTrendData = period === '最近 7 天' ? trendData7d : trendData;
+
+  const selectedTrace = traces.find((trace) => trace.id === selectedTraceId) ?? traces[0] ?? seedTraces[0];
   const filteredTraces = useMemo(
     () => traces.filter((trace) => filter === '全部' || trace.status === filter),
-    [filter]
+    [filter, traces]
   );
+  const metrics = useMemo(() => summarizeTraces(traces), [traces]);
+  const previousMetrics = useMemo(() => summarizeTraces(seedTraces), []);
+  const gateRows = useMemo(() => summarizeGateRows(traces), [traces]);
+  const previousGateRows = useMemo(() => summarizeGateRows(seedTraces), []);
 
   const showToast = (message) => {
     setToast(message);
@@ -213,9 +515,47 @@ function App() {
   const handleRun = () => {
     setIsRunning(true);
     window.setTimeout(() => {
+      const nextTrace = createDemoTrace(traces.length);
+      setTraces((current) => [nextTrace, ...current]);
+      setSelectedTraceId(nextTrace.id);
       setIsRunning(false);
-      showToast('已创建一次演示运行，新的 Trace 将在几秒内出现');
+      showToast('已创建一次演示运行，新的 Trace 已加入列表');
     }, 1500);
+  };
+
+  const handleExport = () => {
+    downloadJson(`agent-observatory-traces-${new Date().toISOString().slice(0, 10)}.json`, {
+      exportedAt: new Date().toISOString(),
+      traces
+    });
+    showToast('已导出 trace JSON');
+  };
+
+  const handleImportClick = () => {
+    fileInputRef.current?.click();
+  };
+
+  const handleImportChange = async (event) => {
+    const file = event.target.files?.[0];
+    if (!file) return;
+
+    try {
+      const text = await file.text();
+      const parsed = JSON.parse(text);
+      const incoming = extractTraceArray(parsed).map((trace, index) => normalizeTrace(trace, index));
+      if (!incoming.length) {
+        showToast('没有找到可导入的 trace');
+        return;
+      }
+
+      setTraces((current) => [...incoming, ...current]);
+      setSelectedTraceId(incoming[0].id);
+      showToast(`已导入 ${incoming.length} 条 trace`);
+    } catch {
+      showToast('导入失败，请检查 JSON 格式');
+    } finally {
+      event.target.value = '';
+    }
   };
 
   return (
@@ -310,6 +650,16 @@ function App() {
         </div>
       </aside>
 
+      <input
+        ref={fileInputRef}
+        type="file"
+        accept="application/json,.json"
+        aria-hidden="true"
+        tabIndex={-1}
+        style={{ display: 'none' }}
+        onChange={handleImportChange}
+      />
+
       <main className="main-content">
         <header className="topbar">
           <div className="topbar-left">
@@ -364,41 +714,41 @@ function App() {
           <section className="stat-grid">
             <StatCard
               label="总运行次数"
-              value="1,284"
-              change="+18.4%"
+              value={formatInteger(metrics.totalRuns)}
+              change={relativePercentChange(metrics.totalRuns, previousMetrics.totalRuns)}
               helper="较上一周期"
               icon={Activity}
               tone="blue"
-              trend="up"
+              trend={metrics.totalRuns >= previousMetrics.totalRuns ? 'up' : 'down'}
             />
             <StatCard
               label="平均质量分"
-              value="91.8"
+              value={metrics.averageScore.toFixed(1)}
               suffix="/ 100"
-              change="+4.2%"
+              change={pointDelta(metrics.averageScore, previousMetrics.averageScore)}
               helper="较上一周期"
               icon={Gauge}
               tone="mint"
-              trend="up"
+              trend={metrics.averageScore >= previousMetrics.averageScore ? 'up' : 'down'}
             />
             <StatCard
               label="平均响应延迟"
-              value="2.4"
+              value={metrics.averageLatency.toFixed(1)}
               suffix="s"
-              change="-12.6%"
+              change={relativePercentChange(metrics.averageLatency, previousMetrics.averageLatency)}
               helper="较上一周期"
               icon={TimerReset}
               tone="violet"
-              trend="down"
+              trend={metrics.averageLatency <= previousMetrics.averageLatency ? 'down' : 'up'}
             />
             <StatCard
               label="本周期成本"
-              value="$18.42"
-              change="+6.8%"
+              value={formatCurrency(metrics.totalCost)}
+              change={relativePercentChange(metrics.totalCost, previousMetrics.totalCost)}
               helper="较上一周期"
               icon={Zap}
               tone="coral"
-              trend="up"
+              trend={metrics.totalCost >= previousMetrics.totalCost ? 'up' : 'down'}
             />
           </section>
 
@@ -410,7 +760,7 @@ function App() {
                   <p>运行量与质量分的实时变化</p>
                 </div>
                 <div className="period-switcher">
-                  {['最近 24 小时', '最近 7 天'].map((item) => (
+                  {periodOptions.map((item) => (
                     <button className={period === item ? 'active' : ''} onClick={() => setPeriod(item)} key={item}>
                       {item}
                     </button>
@@ -424,7 +774,7 @@ function App() {
               </div>
               <div className="chart-wrap">
                 <ResponsiveContainer width="100%" height="100%">
-                  <AreaChart data={trendData} margin={{ top: 16, right: 8, left: -20, bottom: 0 }}>
+                  <AreaChart data={currentTrendData} margin={{ top: 16, right: 8, left: -20, bottom: 0 }}>
                     <defs>
                       <linearGradient id="runFill" x1="0" y1="0" x2="0" y2="1">
                         <stop offset="0%" stopColor="#6da8ff" stopOpacity={0.23} />
@@ -468,17 +818,22 @@ function App() {
                 </div>
                 <div className="gate-copy">
                   <b>状态良好</b>
-                  <span>比上个周期提升 7.2%</span>
+                  <span>比上个周期提升 {pointDelta(metrics.passRate, previousMetrics.passRate)}</span>
                   <div className="mini-bars">
                     {[58, 70, 66, 82, 75, 91, 86, 94].map((height, index) => <i key={index} style={{ height: `${height}%` }} />)}
                   </div>
                 </div>
               </div>
               <div className="gate-list">
-                <GateRow label="引用完整性" value="98.2%" change="+2.4%" tone="mint" />
-                <GateRow label="答案相关性" value="95.6%" change="+1.1%" tone="blue" />
-                <GateRow label="事实一致性" value="92.8%" change="+4.7%" tone="violet" />
-                <GateRow label="敏感信息拦截" value="99.9%" change="+0.2%" tone="coral" />
+                {gateRows.map((row, index) => (
+                  <GateRow
+                    key={row.label}
+                    label={row.label}
+                    value={`${row.rate.toFixed(1)}%`}
+                    change={pointDelta(row.rate, previousGateRows[index]?.rate ?? 0)}
+                    tone={row.tone}
+                  />
+                ))}
               </div>
               <button className="outline-wide-button">配置质量门禁 <Settings2 size={15} /></button>
             </div>
@@ -490,18 +845,24 @@ function App() {
                 <div>
                   <div className="title-with-count">
                     <h2>最近 Trace</h2>
-                    <span className="count-chip">24</span>
+                    <span className="count-chip">{formatInteger(filteredTraces.length)}</span>
                   </div>
                   <p>查看每一次 Agent 执行的完整上下文</p>
                 </div>
                 <div className="trace-controls">
                   <button className="icon-button"><Search size={17} /></button>
                   <button className="icon-button"><Filter size={17} /></button>
-                  <button className="secondary-button compact"><ExternalLink size={15} /> 查看全部</button>
+                  <button className="icon-button" onClick={handleImportClick} aria-label="导入 trace JSON" title="导入 trace JSON">
+                    <Upload size={17} />
+                  </button>
+                  <button className="icon-button" onClick={handleExport} aria-label="导出 trace JSON" title="导出 trace JSON">
+                    <Download size={17} />
+                  </button>
+                  <button className="secondary-button compact" onClick={() => setActiveNav('Trace Explorer')}><ExternalLink size={15} /> 查看全部</button>
                 </div>
               </div>
               <div className="filter-row">
-                {['全部', 'passed', 'warning', 'failed'].map((item) => (
+                {filterOptions.map((item) => (
                   <button
                     key={item}
                     onClick={() => setFilter(item)}
@@ -606,7 +967,7 @@ function App() {
           </section>
 
           <footer className="page-footer">
-            <span><span className="footer-orb" /> 数据每 30 秒自动刷新</span>
+            <span><span className="footer-orb" /> 数据已持久化到本地，可导入或导出</span>
             <span>Agent Observatory v0.1 · 本地演示模式</span>
           </footer>
         </div>
@@ -629,12 +990,13 @@ function StatCard({ label, value, suffix, change, helper, icon: Icon, tone, tren
 }
 
 function GateRow({ label, value, change, tone }) {
+  const Icon = change.trim().startsWith('-') ? ArrowDownRight : ArrowUpRight;
   return (
     <div className="gate-row">
       <span className={`gate-dot ${tone}`} />
       <span>{label}</span>
       <b>{value}</b>
-      <em><ArrowUpRight size={12} />{change}</em>
+      <em><Icon size={12} />{change}</em>
     </div>
   );
 }
